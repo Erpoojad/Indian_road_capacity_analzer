@@ -49,7 +49,7 @@ def _f(v, nd=0, unit=""):
 
 def build(path: str, cap: dict, scan: Optional[dict] = None, image_path: Optional[str] = None,
           traffic: Optional[dict] = None, twin: Optional[dict] = None, road_name: str = "",
-          metrics: Optional[dict] = None) -> str:
+          metrics: Optional[dict] = None, legacy: Optional[dict] = None) -> str:
     doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=16 * mm, rightMargin=16 * mm,
                             topMargin=14 * mm, bottomMargin=14 * mm,
                             title="Road Capacity Assessment", author="Indian Road Capacity Analyzer")
@@ -120,6 +120,28 @@ def build(path: str, cap: dict, scan: Optional[dict] = None, image_path: Optiona
                                  f"{ln['contrast_ratio']:.2f}", f"{ln['score']:.0f} ({ln['condition']})"])
                 s.append(_table(rows, [W * 0.1, W * 0.15, W * 0.15, W * 0.18, W * 0.14, W * 0.28]))
 
+    if legacy and legacy.get("per_defect"):
+        g = legacy.get("overall_guidance") or {}
+        s.append(Paragraph("3A. Recommended actions", H2))
+        s.append(Paragraph(f"<b>Overall: {g.get('band', '-')}</b> — {g.get('action', '')} "
+                           f"(capacity loss {legacy.get('capacity_loss_pct')}% of base capacity; "
+                           f"{g.get('basis', '')}).", BODY))
+        rows = [["Defect", "Count", "Factor alone", "Severity", "Action", "Code"]]
+        for name, d in legacy["per_defect"].items():
+            rows.append([name.replace("_", " "), d["count"], f"{d['factor']:.3f}", d["severity"],
+                         d["action"], d["code_ref"]])
+        s.append(_table(rows, [W * 0.13, W * 0.07, W * 0.1, W * 0.11, W * 0.36, W * 0.23]))
+        rect = (legacy["per_defect"].get("pothole") or {}).get("rectification")
+        if rect:
+            s.append(Spacer(1, 3))
+            s.append(Paragraph(f"<b>Pothole repair ({rect['category']}):</b> {rect['method']} "
+                               f"Materials: {rect['materials']} Priority: {rect['priority']}. "
+                               f"{rect['work_zone_note']} {rect.get('escalation_note') or ''}", SMALL))
+        ds = (legacy["per_defect"].get("pothole") or {}).get("depth_summary")
+        if ds:
+            s.append(Paragraph("<b>Depth indicator (MiDaS):</b> " + ", ".join(f"{k} {v}" for k, v in ds["counts"].items())
+                               + ". " + ds["note"], SMALL))
+
     s.append(Paragraph("4. Capacity calculation", H2))
     rows = [["Step", "Value", "Source", "Working"]]
     for st in cap["steps"]:
@@ -137,6 +159,15 @@ def build(path: str, cap: dict, scan: Optional[dict] = None, image_path: Optiona
         s.append(_table(rows, [W * 0.12, W * 0.3, W * 0.13, W * 0.13, W * 0.16, W * 0.16]))
         s.append(Paragraph(f"Video length {traffic['duration_s']:.0f} s; PCU from Indo-HCM Table 5.3 medians. "
                            + " ".join(traffic.get("notes", [])), SMALL))
+        sc = traffic.get("speed_check")
+        if sc:
+            s.append(Paragraph(f"<b>Speed check</b> (limit {sc['speed_limit_kmh']:g} km/h): {len(sc['over_limit'])} of "
+                               f"{sc['vehicles_with_speed']} timed vehicles over the limit. {sc['note']}", BODY))
+            if sc["over_limit"]:
+                rows = [["Vehicle", "Speed (km/h)", "Over by", "Time in video (s)", "Status"]]
+                rows += [[f"#{e['track_id']} {e['class']}", f"{e['speed_kmh']:.1f}", f"{e['over_limit_by_kmh']:.1f}",
+                          f"{e['time_in_video_s']:.1f}", e["verification_status"]] for e in sc["over_limit"]]
+                s.append(_table(rows, [W * 0.22, W * 0.18, W * 0.15, W * 0.2, W * 0.25]))
 
     if twin:
         sm = twin["summary"]

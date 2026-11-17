@@ -12,3 +12,7 @@ services:
         value: "150"
       - key: RCA_ANNOTATE_VIDEO        # 0 = skip the annotated video (faster)
         value: "1"
+      - key: RCA_TILED                 # zoomed second look for small potholes (0 = off, faster)
+        value: "1"
+      - key: RCA_ENABLE_DEPTH          # MiDaS depth by default (the dashboard has a per-photo switch)
+        value: "0"

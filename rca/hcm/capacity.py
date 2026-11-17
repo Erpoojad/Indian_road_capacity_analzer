@@ -81,14 +81,19 @@ def evaluate(inp: RoadInputs, obstruction_intervals_m: Sequence[Tuple[float, flo
                   "source": b["method"], "detail": b["detail"]})
 
     # Step 2 — Indo-HCM side friction (Eq. 5.5)
-    a = hcm.actual_capacity(c0, inp.on_street_parking, inp.bus_stop, inp.access_points)
+    parking = inp.on_street_parking
+    if parking_detected and parking == "none":
+        parking = "len_lt25"
+        notes.append("Parking was detected but its intensity was not surveyed; the mildest Indo-HCM "
+                     "class (Table 5.9, < 25% of length, 0.70) is assumed. Measure it on site.")
+    a = hcm.actual_capacity(c0, parking, inp.bus_stop, inp.access_points)
     c_hcm = a["c_pcu_h"]
     f = a["factors"]
     steps.append({"step": "Indo-HCM capacity C", "value": c_hcm, "unit": "PCU/h", "source": "Eq. 5.5",
                   "detail": f"{c0:.0f} x F_OP {f['F_OP']:.2f} x F_BS {f['F_BS']:.2f} x F_AC {f['F_AC']:.2f}"})
-    if parking_detected and inp.on_street_parking == "none":
-        notes.append("Parked vehicles were detected but on-street parking is set to 'none'. "
-                     "Choose the Table 5.9/5.10 parking class for this segment.")
+    if rt["chapter"] == 2 and any(v != 1.0 for v in f.values()):
+        notes.append("Chapter 2 has no side-friction factors; the Chapter 5 urban factors "
+                     "(Tables 5.9-5.12) are applied to this road as a project assumption.")
 
     # Step 3 — project extension: obstructions and roughness
     fw = ext.width_factor(obstruction_intervals_m, width, c_hcm, rt["divided"], inp.width_method)
@@ -106,7 +111,10 @@ def evaluate(inp: RoadInputs, obstruction_intervals_m: Sequence[Tuple[float, flo
         "width_m": width, "lanes": rt["lanes"], "chapter": rt["chapter"],
         "c0_pcu_h": c0, "c0_method": b["method"], "factors": {**f, "F_W": fw["F_W"], "F_R": fr["F_R"]},
         "capacity_hcm_pcu_h": c_hcm, "capacity_defect_pcu_h": c_def,
-        "capacity_loss_pct": (1 - c_def / c_hcm) * 100 if c_hcm > 0 else 0.0,
+        "capacity_loss_pct": (1 - c_def / c_hcm) * 100 if c_hcm > 0 else 0.0,   # due to defects only
+        "loss_vs_base_pct": (1 - c_def / c0) * 100 if c0 > 0 else 0.0,         # earlier version's figure
+        "indo_hcm_loss_pct": (1 - c_hcm / c0) * 100 if c0 > 0 else 0.0,
+        "parking_class_used": parking,
         "dsv_hcm_pcu_h": dsv_ratio * c_hcm, "dsv_defect_pcu_h": dsv_ratio * c_def,
         "dsv_ratio": dsv_ratio, "width_factor": fw, "roughness": fr,
         "los_table": rt["los_table_ref"], "steps": steps, "notes": notes,
@@ -118,6 +126,7 @@ def evaluate(inp: RoadInputs, obstruction_intervals_m: Sequence[Tuple[float, flo
         vc1 = v / c_hcm if c_hcm > 0 else math.inf
         vc2 = v / c_def if c_def > 0 else math.inf
         out.update(volume_pcu_h=v, volume_source=inp.volume_source or "entered by user",
+                   vc_base=v / c0, los_base=hcm.los_from_vc(v / c0, table=los_table),
                    vc_hcm=vc1, vc_defect=vc2,
                    los_hcm=hcm.los_from_vc(vc1, table=los_table),
                    los_defect=hcm.los_from_vc(vc2, table=los_table),

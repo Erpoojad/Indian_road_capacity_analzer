@@ -24,7 +24,8 @@
   <button class="tab" data-tab="video">2 · Traffic video</button>
   <button class="tab" data-tab="cap">3 · Capacity &amp; LOS</button>
   <button class="tab" data-tab="twin">4 · Digital twin</button>
-  <button class="tab" data-tab="report">5 · Report</button>
+  <button class="tab" data-tab="report">5 · Report &amp; exports</button>
+  <button class="tab" data-tab="field">6 · Field validation</button>
 </nav>
 
 <main>
@@ -45,6 +46,10 @@
         <label>IRI, m/km <span class="hint">only with measured speed</span><input id="iri" type="number" step="0.1"></label>
         <label>Obstruction method<select id="width_method"><option value="proportional">Proportional to usable width</option><option value="table_slope">Table 5.4 slope (428.6 PCU/h per m)</option></select></label>
       </details>
+      <div class="row">
+        <label style="flex:1">Data collected on<input id="data_collection_date" type="date"></label>
+        <label style="flex:1">Analysed on<input id="analysis_date" type="date"></label>
+      </div>
       <label>Traffic volume, PCU/h <span class="hint" id="vol_src">entered by you only</span><input id="volume_pcu_h" type="number" step="1" placeholder="leave empty if not measured"></label>
     </div>
 
@@ -61,6 +66,7 @@
       </div>
       <p class="hint" id="edge_help">Optional: click 4 points — near-left, near-right, far-right, far-left road edge — for perspective-corrected widths.</p>
       <div class="canvas-wrap"><canvas id="photo_canvas"></canvas></div>
+      <label class="check"><input type="checkbox" id="use_depth"> Pothole depth indicator (MiDaS, slower; uncalibrated)</label>
       <button id="btn_scan" class="primary" disabled>Detect defects &amp; compute capacity</button>
       <div id="scan_status" class="status"></div>
     </div>
@@ -71,10 +77,33 @@
     <div class="grid2">
       <div><img id="annotated" alt="annotated photo"></div>
       <div>
-        <table class="tbl" id="obj_table"><thead><tr><th></th><th>Object</th><th>Conf.</th><th>Across road (m)</th><th>Width</th><th>Acts through</th></tr></thead><tbody></tbody></table>
+        <table class="tbl" id="obj_table"><thead><tr><th></th><th>Object</th><th>Conf.</th><th>Across road (m)</th><th>Width</th><th>Acts through</th><th>Found by / depth</th></tr></thead><tbody></tbody></table>
         <div id="lane_card" class="callout"></div>
         <div id="scan_notes" class="notes"></div>
       </div>
+    </div>
+  </div>
+
+  <div class="card" id="actions_card" hidden>
+    <h2>Recommended actions <span class="hint">IRC / municipal actions per defect (same rules as the earlier version)</span></h2>
+    <div id="guidance" class="callout"></div>
+    <table class="tbl" id="actions_table"><thead><tr><th>Defect</th><th>Count</th><th>Factor alone</th><th>Loss</th><th>Severity</th><th>Action</th><th>Code</th></tr></thead><tbody></tbody></table>
+    <div id="rectification" class="notes"></div>
+  </div>
+
+  <div class="card">
+    <h2>Corridor survey <span class="hint">several photos along one road — the weakest section governs (bottleneck rule)</span></h2>
+    <div class="row wrap">
+      <input type="file" id="corr_files" accept="image/*" multiple>
+      <label class="inline">Spacing between photos (m)<input id="corr_spacing" type="number" value="100" style="width:90px"></label>
+      <label class="inline">Start chainage (m)<input id="corr_start" type="number" value="0" style="width:90px"></label>
+      <button id="btn_corridor" class="primary">Analyse corridor</button>
+    </div>
+    <div id="corr_status" class="status"></div>
+    <div id="corr_out" hidden>
+      <div class="kpis" id="corr_kpis"></div>
+      <table class="tbl" id="corr_table"><thead><tr><th>Chainage</th><th>Photo</th><th>Indo-HCM C</th><th>With defects</th><th>Loss vs base</th><th>Defects</th><th>Lane score</th></tr></thead><tbody></tbody></table>
+      <div class="row wrap" id="corr_exports"></div>
     </div>
   </div>
 </section>
@@ -90,6 +119,7 @@
         <button id="btn_line_a" class="ghost" disabled>Draw line A</button>
         <button id="btn_line_b" class="ghost" disabled>Draw line B</button>
         <label class="inline">Trap length (m)<input id="trap_m" type="number" step="0.5" min="5" style="width:90px"></label>
+        <label class="inline">Speed limit (km/h)<input id="speed_limit" type="number" step="5" min="10" style="width:80px" placeholder="optional"></label>
       </div>
       <div class="canvas-wrap"><canvas id="video_canvas"></canvas></div>
       <button id="btn_count" class="primary" disabled>Count vehicles</button>
@@ -153,6 +183,41 @@
     <label class="check"><input type="checkbox" id="rep_video" checked> Include traffic survey (if run)</label>
     <button id="btn_report" class="primary">Download PDF report</button>
     <div id="report_status" class="status"></div>
+  </div>
+  <div class="card">
+    <h2>Files for departments and RoadRunner / MATLAB <span class="hint">for the analysed photo, with your accepted detections</span></h2>
+    <div class="row wrap" id="scan_exports"><span class="hint">Analyse a photo in tab 1 first.</span></div>
+    <p class="hint">Department report: one section per responsible department (PWD, Traffic Police, Encroachment, SWM). Bundle: RoadRunner .xodr (ideal and current), capacity JSON and the MATLAB twin scripts.</p>
+  </div>
+</section>
+
+<!-- ============ FIELD VALIDATION ============ -->
+<section class="panel" id="tab-field">
+  <div class="grid2">
+    <div class="card">
+      <h2>Field capacity from a survey <span class="hint">Indo-HCM Annex 5C–5E</span></h2>
+      <p class="hint">A: operating speed + Eq. 5.4 (≥ 100 free cars). B: Greenshields speed–flow fit over 5-min periods (needs low and near-capacity flows). C: queue discharge (standard method, not in Indo-HCM).</p>
+      <div class="row wrap">
+        <label class="inline">Trap length (m)<input id="f_trap" type="number" value="60" style="width:80px"></label>
+        <label class="inline">PCU method<select id="f_pcu"><option value="table">Table 5.3 medians</option><option value="se">Se (Eq. 5.2/5.3)</option></select></label>
+      </div>
+      <div class="row wrap">
+        <input type="file" id="f_csv" accept=".csv,text/csv">
+        <button id="btn_f_csv" class="primary">Analyse vehicles.csv</button>
+        <a href="/api/field/template/vehicles_template.csv" class="hint">template</a>
+      </div>
+      <div class="row wrap"><button id="btn_f_video" class="ghost">Use the video counted in tab 2</button><span class="hint">needs line B and trap length</span></div>
+      <div id="f_status" class="status"></div>
+      <div id="f_out"></div>
+    </div>
+    <div class="card">
+      <h2>Compare dashboard vs field <span class="hint">MAPE, RMSE, bias — one line per site</span></h2>
+      <p class="hint">Each line: <code>predicted, observed</code> (capacity in PCU/h, or capacity loss in %).</p>
+      <textarea id="f_pairs" rows="8" style="width:100%;font:13px monospace" placeholder="2318, 2210&#10;1850, 1920"></textarea>
+      <button id="btn_f_compare" class="primary">Compute error metrics</button>
+      <div id="f_cmp" class="status"></div>
+      <a href="/api/field/template/validation_template.csv" class="hint">validation sheet template</a>
+    </div>
   </div>
 </section>
 </main>

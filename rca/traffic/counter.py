@@ -76,7 +76,8 @@ class VehicleCounter:
     def run(self, video_path: str, line_a: Line, line_b: Optional[Line] = None,
             trap_length_m: Optional[float] = None, road_type: str = "divided_4lane",
             max_seconds: Optional[float] = None, annotate_path: Optional[str] = None,
-            progress: Optional[Callable[[float], None]] = None) -> dict:
+            progress: Optional[Callable[[float], None]] = None,
+            speed_limit_kmh: Optional[float] = None, evidence_dir: Optional[str] = None) -> dict:
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise ValueError("Could not open the video.")
@@ -89,6 +90,11 @@ class VehicleCounter:
         writer = _Writer(annotate_path, w, h, fps / stride) if annotate_path else None
         frame_idx, last = 0, -1
         counted_a: Dict[int, str] = {}
+        crops: Dict[int, str] = {}           # track id -> evidence crop at line B (speed check)
+        want_crops = bool(speed_limit_kmh and line_b is not None and evidence_dir)
+        if want_crops:
+            import os
+            os.makedirs(evidence_dir, exist_ok=True)
         while True:
             ok = cap.grab()
             if not ok or (limit and frame_idx >= limit):
@@ -100,6 +106,15 @@ class VehicleCounter:
                 dets = self.model(frame, conf=0.15, iou=0.6, classes=self.class_ids)
                 active = tracker.step(dets, frame_idx)
                 last = frame_idx
+                if want_crops:
+                    for t in active:
+                        if t.id not in crops and t.hits >= MIN_HITS and first_crossing(t, line_b, fps):
+                            x0, y0, x1, y1 = (int(max(0, v)) for v in t.box)
+                            crop = frame[y0:max(y1, y0 + 2), x0:max(x1, x0 + 2)]
+                            if crop.size:
+                                path = f"{evidence_dir}/vehicle_{t.id}.jpg"
+                                cv2.imwrite(path, crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                                crops[t.id] = path
                 if writer:
                     for t in active:
                         if t.id not in counted_a and t.hits >= MIN_HITS and first_crossing(t, line_a, fps):
@@ -113,9 +128,12 @@ class VehicleCounter:
             writer.close()
         tracks = [t for t in tracker.finish() if t.hits >= MIN_HITS]
         duration_s = (last + 1) / fps if last >= 0 else 0.0
-        return summarise(tracks, fps, duration_s, line_a, line_b, trap_length_m, road_type,
-                         meta={"fps": fps, "stride": stride, "processed_fps": fps / stride,
-                               "frames": frame_idx, "size": [w, h]})
+        res = summarise(tracks, fps, duration_s, line_a, line_b, trap_length_m, road_type,
+                        meta={"fps": fps, "stride": stride, "processed_fps": fps / stride,
+                              "frames": frame_idx, "size": [w, h]})
+        if speed_limit_kmh:
+            res["speed_check"] = speed_check(res["events"], speed_limit_kmh, crops)
+        return res
 
 
 def classify(tracks: List[Track]) -> Dict[int, str]:
@@ -205,6 +223,32 @@ def direction_stats(evs: List[dict], duration_s: float, road_type: str) -> dict:
             op = hcm.operating_speed([e["speed_kmh"] for e in cars], heads)
             out["operating_speed"] = {k: (round(v, 1) if isinstance(v, float) else v) for k, v in op.items()}
     return out
+
+
+SPEED_SECTION = "Motor Vehicles Act 1988, Sec. 183 (Driving at excessive speed)"
+
+
+def speed_check(events: List[dict], limit_kmh: float, crops: Optional[Dict[int, str]] = None) -> dict:
+    """Over-speed EVIDENCE for a traffic officer (earlier version's
+    speed_challan.py logic: line-crossing timing between two calibrated lines).
+    Never an auto-issued challan: every record needs human verification, and
+    trap speeds depend on the accuracy of the measured trap length."""
+    crops = crops or {}
+    measured = [e for e in events if "speed_kmh" in e]
+    over = []
+    for e in measured:
+        if e["speed_kmh"] > limit_kmh:
+            over.append({"track_id": e["id"], "class": e["class"], "speed_kmh": e["speed_kmh"],
+                         "speed_limit_kmh": limit_kmh,
+                         "over_limit_by_kmh": round(e["speed_kmh"] - limit_kmh, 1),
+                         "time_in_video_s": e.get("t_b", e["t_a"]),
+                         "evidence_image": crops.get(e["id"]),
+                         "plate_reading": None,
+                         "verification_status": "needs_manual_review",
+                         "applicable_section": SPEED_SECTION})
+    return {"speed_limit_kmh": limit_kmh, "vehicles_with_speed": len(measured), "over_limit": over,
+            "note": "Evidence for manual review only. Number-plate reading (experimental/"
+                    "plate_recognition.py) needs EasyOCR and is not run on the server."}
 
 
 class _Writer:

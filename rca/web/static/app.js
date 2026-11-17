@@ -39,6 +39,7 @@ async function init() {
   for (const name of ["on_street_parking", "bus_stop", "access_points"]) {
     $(name).innerHTML = S.options.factors[name].map((o) => `<option value="${o.key}">${esc(o.label)} (×${o.factor.toFixed(2)})</option>`).join("");
   }
+  $("analysis_date").value = new Date().toISOString().slice(0, 10);
   onRoadType();
   rt.addEventListener("change", onRoadType);
   ["width_m", "on_street_parking", "bus_stop", "access_points", "operating_speed_kmh", "iri", "width_method", "road_name"]
@@ -58,7 +59,8 @@ function roadDict() {
            on_street_parking: $("on_street_parking").value, bus_stop: $("bus_stop").value,
            access_points: $("access_points").value, operating_speed_kmh: num("operating_speed_kmh"),
            iri: num("iri"), width_method: $("width_method").value, volume_pcu_h: num("volume_pcu_h"),
-           volume_source: $("volume_pcu_h").value ? (S.volumeSource || "entered by user") : null };
+           volume_source: $("volume_pcu_h").value ? (S.volumeSource || "entered by user") : null,
+           analysis_date: $("analysis_date").value || null, data_collection_date: $("data_collection_date").value || null };
 }
 function acceptedObjects() {
   if (!S.scan) return [];
@@ -73,6 +75,7 @@ async function doRecompute() {
   const body = { road: roadDict(),
     intervals_m: objs.filter((o) => o.acts_through && o.acts_through.startsWith("F_W")).map((o) => [o.left_m, o.right_m]),
     parking_detected: objs.some((o) => o.acts_through && o.acts_through.startsWith("F_OP")) };
+  if (S.scan) refreshActions();
   try { S.cap = await (await postJSON("/api/capacity", body)).json(); renderCap(); }
   catch (e) { $("cap_notes").innerHTML = `<p class="status err">${esc(e.message)}</p>`; }
 }
@@ -152,11 +155,12 @@ $("btn_scan").addEventListener("click", async () => {
   const fd = new FormData();
   fd.append("image", S.photoFile); fd.append("road", JSON.stringify(roadDict()));
   if (S.trap.length === 4) fd.append("trapezoid", JSON.stringify(S.trap));
+  fd.append("depth", $("use_depth").checked ? "1" : "0");
   $("btn_scan").disabled = true; $("scan_status").className = "status"; $("scan_status").textContent = "Detecting…";
   try {
     S.scan = await (await api("/api/scan", { method: "POST", body: fd })).json();
     S.accepted = new Set(S.scan.scan.objects.map((_, i) => i).filter((i) => S.scan.scan.objects[i].class !== "vehicle"));
-    renderScan(); recompute();
+    renderScan(); recompute(); renderActions(S.scan.legacy); renderScanExports();
     $("scan_status").textContent = `Done: ${S.scan.scan.objects.filter((o) => o.class !== "vehicle").length} obstruction(s). Check them below.`;
   } catch (e) { $("scan_status").className = "status err"; $("scan_status").textContent = e.message; }
   $("btn_scan").disabled = false;
@@ -168,11 +172,12 @@ function renderScan() {
     `<tr class="${S.accepted.has(i) ? "" : "off"}"><td><input type="checkbox" data-i="${i}" ${S.accepted.has(i) ? "checked" : ""}></td>
      <td>${esc(o.class.replace("_", " "))}${o.irc82_size ? ` <span class="hint">(${o.irc82_size}, IRC:82)</span>` : ""}</td>
      <td>${o.conf.toFixed(2)}</td><td>${o.left_m.toFixed(2)} – ${o.right_m.toFixed(2)}</td><td>${o.width_m.toFixed(2)} m</td>
-     <td>${esc(o.acts_through || "off carriageway")}</td></tr>`).join("");
-  $("obj_table").querySelector("tbody").innerHTML = rows || `<tr><td colspan="6">No obstructions detected.</td></tr>`;
+     <td>${esc(o.acts_through || "off carriageway")}</td>
+     <td>${esc(o.found_by || "")}${o.depth_indicator ? `<br><span class="hint">depth: ${esc(o.depth_indicator.depth_class)} (${o.depth_indicator.depth_score})</span>` : ""}</td></tr>`).join("");
+  $("obj_table").querySelector("tbody").innerHTML = rows || `<tr><td colspan="7">No obstructions detected.</td></tr>`;
   $("obj_table").querySelectorAll("input[type=checkbox]").forEach((cb) => cb.addEventListener("change", () => {
     const i = Number(cb.dataset.i); cb.checked ? S.accepted.add(i) : S.accepted.delete(i);
-    cb.closest("tr").classList.toggle("off", !cb.checked); recompute(); }));
+    cb.closest("tr").classList.toggle("off", !cb.checked); recompute(); refreshActions(); }));
   const lm = sc.lane_markings;
   if (lm && lm.available) {
     const rows = lm.lines.map((l) => `<tr><td>L${l.id}</td><td>${l.type}</td><td>${l.colour}</td><td>${Math.round(l.painted_share * 100)} %</td><td>${fmt(l.contrast_ratio, 2)}</td><td><b>${fmt(l.score)}</b> (${esc(l.condition)})</td></tr>`).join("");
@@ -228,7 +233,8 @@ $("btn_count").addEventListener("click", async () => {
   if (S.lineB.length === 2) {
     if (!$("trap_m").value) { $("video_status").className = "status err"; $("video_status").textContent = "Enter the distance between line A and line B."; return; }
     fd.append("line_b", JSON.stringify(S.lineB)); fd.append("trap_length_m", $("trap_m").value);
-  }
+    if ($("speed_limit").value) fd.append("speed_limit_kmh", $("speed_limit").value);
+  } else if ($("speed_limit").value) { $("video_status").className = "status err"; $("video_status").textContent = "The speed check needs line B and the trap length."; return; }
   $("btn_count").disabled = true; $("video_status").className = "status"; $("video_status").textContent = "Uploading…";
   document.querySelector(".progress").hidden = false; $("prog_bar").style.width = "0";
   try {
@@ -262,6 +268,14 @@ function renderTraffic() {
   if (!divided) html += `<p><button class="ghost use" data-v="${total.toFixed(1)}" data-d="both">Use both directions (${fmt(total)} PCU/h) as volume</button> <span class="hint">undivided road: capacity is for both directions</span></p>`;
   const op = Object.values(t.directions).map((v) => v.operating_speed).find((o) => o && o.operating_speed_kmh);
   if (op) html += `<p>Operating speed of free cars: <b>${fmt(op.operating_speed_kmh, 1)} km/h</b> (${op.n_free_cars} cars)${op.warning ? ` <span class="hint">${esc(op.warning)}</span>` : ""}</p>`;
+  const sc = t.speed_check;
+  if (sc) {
+    html += `<h2 style="margin-top:12px">Speed check (limit ${sc.speed_limit_kmh} km/h)</h2><p>${sc.over_limit.length} of ${sc.vehicles_with_speed} timed vehicles over the limit.</p>`;
+    if (sc.over_limit.length) html += `<table class="tbl"><thead><tr><th>Vehicle</th><th>Speed</th><th>Over by</th><th>Time in video</th><th>Evidence</th><th>Status</th></tr></thead><tbody>` +
+      sc.over_limit.map((e) => `<tr><td>#${e.track_id} ${esc(e.class)}</td><td>${fmt(e.speed_kmh, 1)} km/h</td><td>${fmt(e.over_limit_by_kmh, 1)}</td><td>${fmt(e.time_in_video_s, 1)} s</td>
+        <td>${e.evidence_image ? `<a href="${e.evidence_image}" target="_blank"><img src="${e.evidence_image}" style="height:48px;border-radius:4px"></a>` : "—"}</td><td>${esc(e.verification_status)}</td></tr>`).join("") + "</tbody></table>";
+    html += `<p class="hint">${esc(sc.note)} ${esc(sc.over_limit[0] ? sc.over_limit[0].applicable_section : "")}</p>`;
+  }
   html += "<ul class='notes'>" + t.notes.map((n) => `<li>${esc(n)}</li>`).join("") + "</ul>";
   $("video_summary").innerHTML = html;
   $("video_summary").querySelectorAll("button.use").forEach((b) => b.addEventListener("click", () => {
@@ -380,3 +394,111 @@ $("btn_report").addEventListener("click", async () => {
 });
 
 init();
+
+
+/* ---------------- recommended actions (earlier version's rules) ---------------- */
+const SEV = { URGENT: "#b91c1c", ROUTINE: "#b45309", MONITOR: "#15803d", INVESTIGATE: "#6b7280" };
+function renderActions(leg) {
+  if (!leg) return;
+  $("actions_card").hidden = false;
+  const g = leg.overall_guidance || {};
+  $("guidance").innerHTML = `<b>Overall: ${esc(g.band || "-")}</b> — ${esc(g.action || "")} <span class="hint">(capacity loss ${fmt(leg.capacity_loss_pct, 1)} % of base capacity; ${esc(g.basis || "")})</span>`;
+  const pd = leg.per_defect || {};
+  $("actions_table").querySelector("tbody").innerHTML = Object.keys(pd).length ? Object.entries(pd).map(([k, d]) =>
+    `<tr><td>${esc(k.replace("_", " "))}</td><td>${d.count}</td><td>${fmt(d.factor, 3)}</td><td>${fmt(d.capacity_loss_pct, 1)} %</td>
+     <td><b style="color:${SEV[d.severity] || "#333"}">${esc(d.severity)}</b><br><span class="hint">${esc(d.severity_basis)}</span></td>
+     <td>${esc(d.action)}</td><td class="hint">${esc(d.code_ref)}</td></tr>`).join("") : `<tr><td colspan="7">No obstructions accepted — no action required.</td></tr>`;
+  const r = (pd.pothole || {}).rectification, ds = (pd.pothole || {}).depth_summary;
+  $("rectification").innerHTML = (r ? `<p><b>Pothole repair — ${esc(r.category)}:</b> ${esc(r.method)}<br>Materials: ${esc(r.materials)}<br>Priority: ${esc(r.priority)} · ${esc(r.irc_reference)}<br>${esc(r.work_zone_note)} ${esc(r.escalation_note || "")}</p>` : "")
+    + (ds ? `<p><b>Depth indicator:</b> ${Object.entries(ds.counts).map(([k, v]) => `${k} ${v}`).join(", ")}. ${esc(ds.note)}</p>` : "");
+}
+let actTimer = null;
+function refreshActions() {
+  clearTimeout(actTimer);
+  actTimer = setTimeout(async () => {
+    try {
+      const leg = await (await postJSON("/api/legacy", { scan_id: S.scan.id, road: roadDict(), accepted: [...S.accepted] })).json();
+      renderActions(leg);
+    } catch (_) {}
+  }, 250);
+}
+
+/* ---------------- exports ---------------- */
+const EXPORTS = [["department-report.pdf", "Department report (PDF)"], ["defects.xlsx", "Defect log (Excel)"],
+  ["roadrunner.xodr", "RoadRunner .xodr"], ["roadrunner-ideal.xodr", "RoadRunner ideal .xodr"],
+  ["roadrunner-capacity.json", "Capacity JSON"], ["bundle.zip", "Digital-twin bundle (MATLAB)"]];
+async function download(kind, body, fname) {
+  const blob = await (await postJSON(`/api/export/${kind}`, body)).blob();
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fname; a.click();
+}
+function exportButtons(el, bodyFn, stem) {
+  el.innerHTML = EXPORTS.map(([k, label]) => `<button class="ghost" data-k="${k}">${label}</button>`).join("");
+  el.querySelectorAll("button").forEach((b) => b.addEventListener("click", async () => {
+    b.disabled = true; const t = b.textContent; b.textContent = "Preparing…";
+    try { await download(b.dataset.k, bodyFn(), `${stem()}_${b.dataset.k}`); } catch (e) { alert(e.message); }
+    b.disabled = false; b.textContent = t;
+  }));
+}
+const stemName = () => ($("road_name").value || "road").replace(/[^a-z0-9]+/gi, "_");
+function renderScanExports() {
+  exportButtons($("scan_exports"), () => ({ scan_id: S.scan.id, road: roadDict(), accepted: [...S.accepted], site_label: $("road_name").value || null }), stemName);
+}
+
+/* ---------------- corridor ---------------- */
+$("btn_corridor").addEventListener("click", async () => {
+  const files = $("corr_files").files;
+  if (!files.length) { $("corr_status").textContent = "Choose the photos first (in order along the road)."; return; }
+  const fd = new FormData();
+  [...files].forEach((f) => fd.append("images", f));
+  fd.append("road", JSON.stringify(roadDict())); fd.append("spacing_m", $("corr_spacing").value || "100");
+  fd.append("start_chainage_m", $("corr_start").value || "0"); fd.append("depth", $("use_depth").checked ? "1" : "0");
+  $("btn_corridor").disabled = true; $("corr_status").className = "status"; $("corr_status").textContent = `Analysing ${files.length} photo(s)…`;
+  try {
+    const c = await (await api("/api/corridor", { method: "POST", body: fd })).json();
+    S.corridor = c; $("corr_out").hidden = false;
+    const sm = c.summary;
+    $("corr_kpis").innerHTML = [["Bottleneck capacity", fmt(sm.bottleneck_capacity_pcu_h) + " PCU/h", `at ${esc(sm.worst_image_or_frame || "-")}`, true],
+      ["Worst loss", fmt(sm.worst_capacity_loss_pct, 1) + " %", "of base capacity"], ["Median loss", fmt(sm.median_capacity_loss_pct, 1) + " %", "how widespread"],
+      ["Sections", c.sections.length, c.errors.length ? `${c.errors.length} unreadable` : "all analysed"]]
+      .map(([k, v, s2, hl]) => `<div class="kpi${hl ? " hl" : ""}"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s2}</div></div>`).join("");
+    $("corr_table").querySelector("tbody").innerHTML = c.sections.map((x) => `<tr><td>${fmt(x.chainage_m)} m</td><td><a href="${x.annotated_url}" target="_blank">${esc(x.image)}</a></td>
+      <td>${fmt(x.capacity_hcm_pcu_h)}</td><td><b>${fmt(x.reduced_capacity_pcu_h)}</b></td><td>${fmt(x.capacity_loss_pct, 1)} %</td><td>${esc(x.defects_found.join(", ") || "none")}</td><td>${x.lane_score == null ? "—" : fmt(x.lane_score)}</td></tr>`).join("");
+    exportButtons($("corr_exports"), () => ({ corridor_id: S.corridor.id, road: roadDict(), site_label: $("road_name").value || null }), () => stemName() + "_corridor");
+    $("corr_status").textContent = "Done. Road edges are not marked in corridor mode: widths assume the photo spans the carriageway.";
+  } catch (e) { $("corr_status").className = "status err"; $("corr_status").textContent = e.message; }
+  $("btn_corridor").disabled = false;
+});
+
+/* ---------------- field validation ---------------- */
+function renderField(r) {
+  const A = r.method_A || {}, B = r.method_B || {};
+  let h = `<p>${r.vehicles} vehicles${r.source ? ` · ${esc(r.source)}` : ""}.</p><table class="tbl"><thead><tr><th>Method</th><th>Capacity</th><th>Details</th></tr></thead><tbody>`;
+  h += `<tr><td>${esc(A.method || "A")}</td><td><b>${A.capacity_pcu_h == null ? "—" : fmt(A.capacity_pcu_h) + " PCU/h"}</b></td><td>operating speed ${A.operating_speed_kmh == null ? "—" : fmt(A.operating_speed_kmh, 1) + " km/h"} (${A.n_free_cars || 0} free cars) ${esc(A.warning || "")}</td></tr>`;
+  h += `<tr><td>${esc(B.method || "B")}</td><td><b>${B.capacity_pcu_h == null ? "—" : fmt(B.capacity_pcu_h) + " PCU/h"}</b></td><td>${B.free_speed_kmh ? `v_f ${fmt(B.free_speed_kmh, 1)} km/h, k_j ${fmt(B.jam_density_pcu_km, 0)} PCU/km, R² ${fmt(B.r2, 2)}. ` : ""}${esc(B.warning || "")}</td></tr>`;
+  h += `<tr><td>Peak 5-min flow</td><td>${r.peak_5min_flow_pcu_h == null ? "—" : fmt(r.peak_5min_flow_pcu_h) + " PCU/h"}</td><td>demand, not capacity, unless a queue stood upstream (method C)</td></tr></tbody></table>`;
+  if (r.periods && r.periods.length) h += `<details><summary>${r.periods.length} five-minute periods</summary><table class="tbl"><thead><tr><th>Start (s)</th><th>Vehicles</th><th>PCU/h</th><th>SMS km/h</th><th>PCU/km</th></tr></thead><tbody>` +
+    r.periods.map((p) => `<tr><td>${fmt(p.start_s)}</td><td>${p.vehicles}</td><td>${fmt(p.flow_pcu_h)}</td><td>${fmt(p.sms_kmh, 1)}</td><td>${fmt(p.density_pcu_km, 1)}</td></tr>`).join("") + "</tbody></table></details>";
+  h += (r.warnings || []).map((w) => `<p class="hint">${esc(w)}</p>`).join("");
+  $("f_out").innerHTML = h;
+}
+$("btn_f_csv").addEventListener("click", async () => {
+  const f = $("f_csv").files[0]; if (!f) { $("f_status").textContent = "Choose a vehicles.csv first."; return; }
+  const fd = new FormData(); fd.append("file", f); fd.append("trap_m", $("f_trap").value); fd.append("road_type", $("road_type").value); fd.append("pcu_method", $("f_pcu").value);
+  $("f_status").className = "status"; $("f_status").textContent = "Analysing…";
+  try { renderField(await (await api("/api/field/analyse", { method: "POST", body: fd })).json()); $("f_status").textContent = ""; }
+  catch (e) { $("f_status").className = "status err"; $("f_status").textContent = e.message; }
+});
+$("btn_f_video").addEventListener("click", async () => {
+  if (!S.jobId || !S.traffic) { $("f_status").textContent = "Count a video in tab 2 first (with line B and trap length)."; return; }
+  $("f_status").className = "status"; $("f_status").textContent = "Analysing…";
+  try { renderField(await (await postJSON("/api/field/from-video", { job_id: S.jobId, road_type: $("road_type").value, pcu_method: $("f_pcu").value })).json()); $("f_status").textContent = ""; }
+  catch (e) { $("f_status").className = "status err"; $("f_status").textContent = e.message; }
+});
+$("btn_f_compare").addEventListener("click", async () => {
+  const pairs = $("f_pairs").value.split("\n").map((l) => l.split(/[,\t ]+/).filter(Boolean).map(Number)).filter((p) => p.length >= 2 && p.every((v) => !Number.isNaN(v)));
+  if (!pairs.length) { $("f_cmp").textContent = "Enter at least one line: predicted, observed."; return; }
+  try {
+    const m = await (await postJSON("/api/field/compare", { predicted: pairs.map((p) => p[0]), observed: pairs.map((p) => p[1]) })).json();
+    $("f_cmp").className = "status"; $("f_cmp").innerHTML = `<b>n = ${m.n}</b> · MAPE <b>${fmt(m.mape_pct, 1)} %</b> · RMSE ${fmt(m.rmse, 1)} · bias ${fmt(m.bias, 1)} (predicted − observed)${m.note ? ` <br><span class="hint">${esc(m.note)}</span>` : ""}`;
+  } catch (e) { $("f_cmp").className = "status err"; $("f_cmp").textContent = e.message; }
+});

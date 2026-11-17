@@ -97,32 +97,60 @@ def width_factor(intervals: Sequence[Interval], width_m: float, c0: float,
 # Eq. 5.4. Chapter 2 roads use their own Eq. 2.19 / 2.20.
 # ------------------------------------------------------------------
 BASE_IRI_LIMIT = 3.0
-CH2_ROUGHNESS = {"single_lane": (945.0, 25.0, "Eq. 2.20"),
-                 "intermediate_lane": (2956.0, 199.0, "Eq. 2.19")}
+CH2_ROUGHNESS = {
+    "single_lane":       {"cap": (945.0, 25.0), "eq": "Eq. 2.20", "speed": None},
+    "intermediate_lane": {"cap": (2956.0, 199.0), "eq": "Eq. 2.19", "speed": (91.0, 6.7)},
+}
 
 
-def roughness_factor(iri: Optional[float], operating_speed_kmh: Optional[float],
-                     road_type: str) -> dict:
-    if not iri or iri <= BASE_IRI_LIMIT:
-        return {"F_R": 1.0, "applied": False, "note": None}
+def roughness_factor(iri_m_per_km: Optional[float], operating_speed_kmh: Optional[float],
+                     road_type: Optional[str] = None) -> dict:
+    if not iri_m_per_km or iri_m_per_km <= BASE_IRI_LIMIT:
+        return {"F_R": 1.0, "speed_ratio": 1.0, "applied": False}
+    v_known = operating_speed_kmh is not None and operating_speed_kmh > 0
     if road_type in CH2_ROUGHNESS:
-        a, b, eq = CH2_ROUGHNESS[road_type]
-        f = max(a - b * iri, 0.0) / (a - b * BASE_IRI_LIMIT)
-        return {"F_R": f, "applied": True, "note": f"Indo-HCM {eq}, relative to IRI 3."}
-    if not operating_speed_kmh:
-        return {"F_R": 1.0, "applied": False,
-                "note": f"IRI {iri:g} entered but operating speed not measured; F_R needs Eq. 5.4 "
-                        f"with the site's operating speed, so it is not applied."}
-    r = max((104 - 6.8 * iri) / (104 - 6.8 * BASE_IRI_LIMIT), 0.1)
-    v = operating_speed_kmh
-    f = hcm.lane_capacity_from_operating_speed(v * r) / hcm.lane_capacity_from_operating_speed(v)
-    note = "Eq. 2.15 (relative) + Eq. 5.4."
-    if v * r < hcm.SPEED_MODEL_RANGE_KMH[0]:
-        note += f" Reduced speed {v * r:.1f} km/h is below Eq. 5.4's 40 km/h range (extrapolated)."
-    return {"F_R": f, "applied": True, "reduced_speed_kmh": v * r, "note": note}
+        m = CH2_ROUGHNESS[road_type]
+        a, b = m["cap"]
+        f = max(a - b * iri_m_per_km, 0.0) / (a - b * BASE_IRI_LIMIT)
+        if m["speed"]:
+            sa, sb = m["speed"]
+            r = max(sa - sb * iri_m_per_km, 0.1 * sa) / (sa - sb * BASE_IRI_LIMIT)
+        else:
+            r = f   # CHOICE: no single-lane speed-roughness equation; speed scaled like capacity
+        return {"F_R": f, "speed_ratio": r, "applied": True,
+                "reduced_speed_kmh": operating_speed_kmh * r if v_known else None,
+                "source": f"Indo-HCM {m['eq']} relative to IRI {BASE_IRI_LIMIT:g}", "note": None}
+    r = (104 - 6.8 * iri_m_per_km) / (104 - 6.8 * BASE_IRI_LIMIT)
+    r = max(r, 0.1)
+    if not v_known:
+        # Eq. 5.4 needs the site's operating speed; no assumed speed is used.
+        return {"F_R": 1.0, "speed_ratio": r, "applied": False, "reduced_speed_kmh": None,
+                "note": f"IRI {iri_m_per_km:g} m/km was entered but the operating speed was not measured, "
+                        f"so the roughness factor F_R (Eq. 5.4) is not applied. Measure the operating speed."}
+    v0 = operating_speed_kmh
+    f = hcm.lane_capacity_from_operating_speed(v0 * r) / hcm.lane_capacity_from_operating_speed(v0)
+    note = None
+    if v0 * r < hcm.SPEED_MODEL_RANGE_KMH[0]:
+        note = (f"Reduced speed {v0 * r:.1f} km/h is below the 40 km/h validity of Eq. 5.4; "
+                f"F_R is an extrapolation.")
+    return {"F_R": f, "speed_ratio": r, "applied": True, "reduced_speed_kmh": v0 * r, "note": note}
+
 
 
 def pothole_size_class(width_m: float) -> str:
     """IRC:82-2015 cl. 7.5.3.4 by width (depth cannot be measured from a photo).
     Maintenance priority only: capacity effect is through F_W."""
     return "small" if width_m <= 0.20 else ("medium" if width_m <= 0.50 else "large")
+
+
+# ------------------------------------------------------------------
+# Indicative vehicles/h (display only). ASSUMED urban mix; capacity logic is
+# entirely in PCU/h. Replace with the site's classified count.
+# ------------------------------------------------------------------
+ASSUMED_COMPOSITION = {"two_wheeler": 0.55, "car": 0.25, "auto": 0.10, "bus": 0.03,
+                       "lcv": 0.04, "tat": 0.02, "bicycle": 0.01}
+
+
+def avg_pcu_per_vehicle(road_type: str) -> float:
+    pcu = hcm.pcu_values(road_type)
+    return sum(s * pcu.get(k, 1.0) for k, s in ASSUMED_COMPOSITION.items()) / sum(ASSUMED_COMPOSITION.values())

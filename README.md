@@ -19,6 +19,12 @@ road department.
 | Lane markings | each marking line: solid/broken, white/yellow, condition score 0–100 | symmetric ridge filter + shape filter + Hough (no training needed) |
 | Traffic video | counts by class & direction, PCU/h, trap speeds, density, operating speed | YOLOv8n + ByteTrack-style tracker |
 | Digital twin | queue, delay, throughput, time–space diagram, animation | cell transmission model + Greenshields |
+| Recommended actions | IRC / municipal action and severity per defect, overall guidance, IRC:82 pothole repair method | rules carried over from the earlier version |
+| Pothole depth (optional) | MiDaS relative depth indicator per pothole | MiDaS small (ONNX), uncalibrated |
+| Corridor survey | several photos with chainage → bottleneck capacity, median loss | weakest section governs |
+| Speed check | vehicles over a speed limit between the trap lines, with evidence crops | MV Act s.183 evidence, manual review |
+| Field validation | methods A (Eq. 5.4), B (Greenshields fit), C (queue discharge); MAPE/RMSE/bias vs dashboard | Indo-HCM Annex 5C–5E; works on a CSV or on the counted video |
+| Exports | department-routed PDF, Excel defect log, RoadRunner .xodr (current + ideal), capacity JSON, MATLAB twin bundle | earlier version's modules (rca/legacy) |
 | Report | A4 PDF with every step and source | ReportLab |
 
 Full method, assumptions, validation plan and manual errata: **[docs/METHODOLOGY.md](docs/METHODOLOGY.md)**.
@@ -37,7 +43,8 @@ uvicorn rca.api:app --port 8000
 2. Render → **New → Blueprint** → choose the repository (it reads `render.yaml`).
 3. Wait for the build; open the URL. Health check: `/api/health`.
 
-The server uses ONNX Runtime, not PyTorch, so it fits the 512 MB free plan (peak ≈ 375 MB measured).
+The server uses ONNX Runtime, not PyTorch, so it fits the 512 MB free plan (peak ≈ 370 MB measured with
+depth, zoomed tiles and a video job; `MALLOC_ARENA_MAX=2` and heap trimming keep it there).
 The free plan sleeps after 15 min idle; the first request then takes ~1 min.
 
 ## Retrain the detector (better accuracy)
@@ -55,7 +62,7 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-29 tests: Indo-HCM tables and worked Examples 5.5.1–5.5.4, LOS band edges, obstruction
+50 tests: Indo-HCM tables and worked Examples 5.5.1–5.5.4, LOS band edges, obstruction
 factors, exact vehicle counting and trap speeds on synthetic traffic, perspective mapping,
 lane-marking detection on synthetic and real photos, digital-twin physics (bottleneck throughput, Greenshields speed),
 and the API end to end with the real models.
@@ -68,10 +75,15 @@ rca/
   vision/     onnx_yolo.py, road_scan.py (photo → metres), lanes.py (lane markings)
   traffic/    tracker.py, counter.py (video survey)
   twin/       ctm.py (digital twin)
+  legacy/     earlier version's modules: exports, department PDF, pothole repair, MATLAB-twin engine
+  experimental/ earlier version's unwired modules (plate recognition, footpath, ...)
+  field_validation.py  methods A/B/C and error metrics
   report.py   PDF
   api.py      FastAPI backend
   web/static  dashboard (HTML/CSS/JS, no build step)
-models/       defects.onnx, vehicles.onnx, defects_metrics.json
+models/       defects.onnx, vehicles.onnx, midas_small.onnx, defects_metrics.json
+              (optional class_thresholds.json overrides per-class confidence thresholds)
+matlab_twin/  MATLAB / RoadRunner twin scripts (shipped in the bundle export)
 training/     Colab notebook, merge_datasets.py, class_map.yaml
 tests/
 docs/METHODOLOGY.md

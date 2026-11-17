@@ -9,3 +9,7 @@ scipy==1.14.1
 opencv-python-headless==4.10.0.84
 reportlab==4.2.5
 pyyaml==6.0.2
+# Earlier version's exports: RoadRunner OpenDRIVE (.xodr) and Excel defect log
+scenariogeneration==0.16.6
+openpyxl==3.1.5
+psutil==6.1.1

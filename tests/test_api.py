@@ -51,3 +51,50 @@ def test_twin_endpoint(client):
     r = client.post("/api/twin", json={"capacity_clear_pcu_h": 2700, "capacity_defect_pcu_h": 2000,
                                        "vf_kmh": 50, "demand_pcu_h": 2300})
     assert r.status_code == 200 and r.json()["summary"]["breakdown"] is True
+
+
+def _jpg(h=480, w=640):
+    img = np.full((h, w, 3), 90, np.uint8)
+    return cv2.imencode(".jpg", img)[1].tobytes()
+
+
+def test_all_exports_for_a_scan(client):
+    road = {"road_type": "divided_4lane", "width_m": 7, "volume_pcu_h": 1800, "operating_speed_kmh": 55}
+    sample = (ROOT / "rca" / "web" / "static" / "samples" / "potholes.jpg").read_bytes()
+    rec = client.post("/api/scan", files={"image": ("p.jpg", sample, "image/jpeg")},
+                      data={"road": json.dumps(road), "depth": "1"}).json()
+    pd = rec["legacy"]["per_defect"]
+    assert pd["pothole"]["severity"] == "URGENT" and "rectification" in pd["pothole"]
+    assert any("depth_indicator" in o for o in rec["scan"]["objects"])
+    sigs = {"defects.xlsx": b"PK", "roadrunner.xodr": b"<?xml", "roadrunner-ideal.xodr": b"<?xml",
+            "roadrunner-capacity.json": b"{", "department-report.pdf": b"%PDF", "bundle.zip": b"PK"}
+    for kind, sig in sigs.items():
+        r = client.post(f"/api/export/{kind}", json={"scan_id": rec["id"], "road": road})
+        assert r.status_code == 200, (kind, r.text[:200])
+        assert r.content[:len(sig)] == sig, kind
+    import io, zipfile
+    names = zipfile.ZipFile(io.BytesIO(client.post("/api/export/bundle.zip", json={"scan_id": rec["id"]}).content)).namelist()
+    assert "run_2d_digital_twin.bat" in names and any(n.endswith("roadrunner_capacity.json") for n in names)
+    cap = json.loads(client.post("/api/export/roadrunner-capacity.json", json={"scan_id": rec["id"], "road": road}).content)
+    assert cap["twin"] is not None                               # volume + speed entered -> twin numbers
+
+
+def test_corridor_bottleneck_and_exports(client):
+    files = [("images", ("a.jpg", _jpg(), "image/jpeg")),
+             ("images", ("b.jpg", (ROOT / "rca/web/static/samples/potholes.jpg").read_bytes(), "image/jpeg"))]
+    c = client.post("/api/corridor", files=files, data={"road": json.dumps({"road_type": "divided_4lane"}),
+                                                        "spacing_m": "50"}).json()
+    assert [s["chainage_m"] for s in c["sections"]] == [0, 50]
+    assert c["summary"]["bottleneck_capacity_pcu_h"] == pytest.approx(min(s["reduced_capacity_pcu_h"] for s in c["sections"]), abs=0.1)
+    for kind in ("roadrunner.xodr", "department-report.pdf", "defects.xlsx", "roadrunner-capacity.json"):
+        assert client.post(f"/api/export/{kind}", json={"corridor_id": c["id"]}).status_code == 200
+
+
+def test_field_endpoints(client):
+    rows = "vehicle_type,t_entry_s,t_exit_s\n" + "".join(f"car,{10 + 12 * i},{13 + 12 * i}\n" for i in range(120))
+    r = client.post("/api/field/analyse", files={"file": ("v.csv", rows.encode(), "text/csv")},
+                    data={"trap_m": "60", "road_type": "divided_4lane"}).json()
+    assert r["method_A"]["operating_speed_kmh"] == pytest.approx(72.0)
+    m = client.post("/api/field/compare", json={"predicted": [110, 90], "observed": [100, 100]}).json()
+    assert m["mape_pct"] == pytest.approx(10)
+    assert client.get("/api/field/template/vehicles_template.csv").status_code == 200

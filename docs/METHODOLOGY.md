@@ -62,9 +62,19 @@ relative form above IRI 3, converted to capacity with Eq. 5.4.
 - **Detector:** YOLOv8s trained on the project's Roboflow datasets (7 classes: barricade,
   pothole, illegal_parking, street_vendor, cart, garbage, vehicle), run with ONNX Runtime.
   Validation: precision 0.81, recall 0.74, mAP50 0.74, mAP50-95 0.55 (`models/defects_metrics.json`).
-- **Cleaning:** per-class confidence thresholds; one object is never counted under two
-  labels (IoU > 0.6 → keep the more confident); a vendor/cart box that is really a moving
-  vehicle is dropped.
+- **Cleaning (same rules as the earlier version):** per-class confidence thresholds
+  (pothole, barricade, garbage 0.45; illegal parking 0.50; vendor, cart 0.65; vehicle 0.40),
+  overridden by `models/class_thresholds.json` (per-class best-F1 from the validation split) when present;
+  one object is never counted under two labels (IoU ≥ 0.60 → keep the more confident);
+  a vendor/cart box overlapping a `vehicle` box (IoU ≥ 0.40) is dropped (autos misread as carts).
+- **Zoomed second look for small potholes:** photos ≥ 1280 px on the long side are also run as
+  four overlapping 2×2 tiles; only pothole boxes are taken from tiles, boxes cut by a tile edge are
+  dropped, and the more confident view of the same pothole is kept.
+- **Parking:** detected parked vehicles with no surveyed parking class → the mildest Indo-HCM class
+  (Table 5.9, < 25 % of length, 0.70) is assumed and stated.
+- **Depth indicator (optional, MiDaS small via ONNX):** plane-corrected depression score in units of
+  road-surface noise (< 2 not distinct, 2–5 shallow, ≥ 5 deep), uncalibrated, never a depth in mm;
+  reported beside the IRC:82 width class, never replacing it.
 - **Perspective:** the engineer may mark the carriageway as a trapezoid. Left and right road
   edges are interpolated row by row, and each object is measured at its bottom edge (where it
   touches the road), so near and far objects are scaled correctly. Without the trapezoid the
@@ -124,7 +134,32 @@ and delay from cumulative curves. Checked against theory in the tests: bottlenec
 equals the reduced capacity; uncongested travel time equals the Greenshields speed.
 Demand and free-flow speed must come from the survey — the twin does not run on assumed values.
 
+## 7A. Recommended actions, corridor, exports (earlier version's rules)
+
+- **Per defect:** the factor that class alone would produce, its capacity loss, a severity and the
+  action with its code reference — potholes by IRC:82 size class (cl. 7.5.3, 5.3), parking by
+  MV Act s.122, vendors/carts by the Street Vendors Act 2014, garbage by SWM Rules 2016,
+  barricades by IRC:SP:55. Other classes use project loss tiers 5 % / 15 % (not from a code).
+- **Overall guidance:** capacity-loss bands 10/25/50/75 % (project reporting thresholds).
+- **Pothole repair:** IRC:82-2015 cl. 7.5.3.4–7.5.3.5; ≥ 5 potholes → structural assessment
+  (IRC:115 FWD / IRC:81 BBD, overlay per IRC:37).
+- **Corridor:** photos at chainage start + i × spacing; the corridor capacity is the weakest
+  section's (bottleneck); the median loss shows how widespread the loss is.
+- **Exports:** department-routed PDF (PWD, Traffic Police, Encroachment Cell, SWM), Excel defect log
+  with RoadRunner s/t coordinates, OpenDRIVE .xodr with and without defects, capacity JSON with the
+  earlier macroscopic twin (Greenshields + deterministic queue + LWR shockwave), and the MATLAB bundle.
+- **Speed check:** trap speed > limit → evidence record (crop, time, MV Act s.183) for manual
+  review; number plates are not read on the server.
+
 ## 8. Validation plan (for the report and paper)
+
+Field capacity (`rca/field_validation.py`, dashboard tab 6), from a vehicles.csv or directly from
+the counted video (vehicles crossing both trap lines):
+A: operating speed of free cars (headway > 8 s, ≥ 100 cars) + Eq. 5.4 (divided roads);
+B: Greenshields fit of space-mean speed vs density over 5-min periods (Annex 5E.4);
+C: queue-discharge flow past an obstruction (standard method, not in Indo-HCM).
+Compare with the dashboard: MAPE, RMSE, bias (n < 10 sites = pilot validation).
+
 
 1. **Detector:** report the validation metrics above; for the paper, add a held-out test set of
    your own Nashik photos (role `test` in `training/class_map.yaml` concept) — the honest figure.
