@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Indian Road Capacity Analyzer</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%23facc15%22/%3E%3Crect x=%2214%22 y=%224%22 width=%224%22 height=%228%22 fill=%22%23111%22/%3E%3Crect x=%2214%22 y=%2220%22 width=%224%22 height=%228%22 fill=%22%23111%22/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <div class="mark">IRCA</div>
+    <div>
+      <h1>Indian Road Capacity Analyzer</h1>
+      <p>Defect-adjusted capacity of urban roads · Indo-HCM 2017 · AI-assisted, engineer-verified</p>
+    </div>
+  </div>
+  <div class="health" id="health">checking server…</div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-tab="road">1 · Road &amp; photo</button>
+  <button class="tab" data-tab="video">2 · Traffic video</button>
+  <button class="tab" data-tab="cap">3 · Capacity &amp; LOS</button>
+  <button class="tab" data-tab="twin">4 · Digital twin</button>
+  <button class="tab" data-tab="report">5 · Report</button>
+</nav>
+
+<main>
+<!-- ============ ROAD & PHOTO ============ -->
+<section class="panel active" id="tab-road">
+  <div class="grid2">
+    <div class="card">
+      <h2>Road segment</h2>
+      <label>Road name / location<input id="road_name" placeholder="e.g. College Road, Nashik (km 1.2)"></label>
+      <label>Road type <span class="hint">Indo-HCM Table 5.4</span><select id="road_type"></select></label>
+      <label>Paved width (m) <span class="hint" id="width_hint"></span><input id="width_m" type="number" step="0.1" min="2"></label>
+      <label>On-street parking <span class="hint">Tables 5.9 / 5.10</span><select id="on_street_parking"></select></label>
+      <label>Bus stop <span class="hint">Table 5.11</span><select id="bus_stop"></select></label>
+      <label>Access points <span class="hint">Table 5.12</span><select id="access_points"></select></label>
+      <details>
+        <summary>Measured site data (optional)</summary>
+        <label>Operating speed of cars, km/h <span class="hint">85th %ile free cars, base section → Eq. 5.4</span><input id="operating_speed_kmh" type="number" step="0.1"></label>
+        <label>IRI, m/km <span class="hint">only with measured speed</span><input id="iri" type="number" step="0.1"></label>
+        <label>Obstruction method<select id="width_method"><option value="proportional">Proportional to usable width</option><option value="table_slope">Table 5.4 slope (428.6 PCU/h per m)</option></select></label>
+      </details>
+      <label>Traffic volume, PCU/h <span class="hint" id="vol_src">entered by you only</span><input id="volume_pcu_h" type="number" step="1" placeholder="leave empty if not measured"></label>
+    </div>
+
+    <div class="card">
+      <h2>Road photo</h2>
+      <div class="row">
+        <input type="file" id="photo" accept="image/*">
+        <button id="btn_edges" class="ghost" disabled>Mark road edges</button>
+        <button id="btn_clear_edges" class="ghost" disabled>Clear</button>
+      </div>
+      <p class="hint" id="edge_help">Optional: click 4 points — near-left, near-right, far-right, far-left road edge — for perspective-corrected widths.</p>
+      <div class="canvas-wrap"><canvas id="photo_canvas"></canvas></div>
+      <button id="btn_scan" class="primary" disabled>Detect defects &amp; compute capacity</button>
+      <div id="scan_status" class="status"></div>
+    </div>
+  </div>
+
+  <div class="card" id="scan_results" hidden>
+    <h2>Detections <span class="hint">untick anything the model got wrong — capacity updates instantly</span></h2>
+    <div class="grid2">
+      <div><img id="annotated" alt="annotated photo"></div>
+      <div>
+        <table class="tbl" id="obj_table"><thead><tr><th></th><th>Object</th><th>Conf.</th><th>Across road (m)</th><th>Width</th><th>Acts through</th></tr></thead><tbody></tbody></table>
+        <div id="lane_card" class="callout"></div>
+        <div id="scan_notes" class="notes"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ VIDEO ============ -->
+<section class="panel" id="tab-video">
+  <div class="grid2">
+    <div class="card">
+      <h2>Traffic survey video</h2>
+      <p class="hint">Camera fixed, looking along the road. Draw count line A across the road. For speeds and density draw line B a known distance downstream (50–75 m trap, Indo-HCM Annex 5C).</p>
+      <input type="file" id="video" accept="video/*">
+      <div class="row">
+        <button id="btn_line_a" class="ghost" disabled>Draw line A</button>
+        <button id="btn_line_b" class="ghost" disabled>Draw line B</button>
+        <label class="inline">Trap length (m)<input id="trap_m" type="number" step="0.5" min="5" style="width:90px"></label>
+      </div>
+      <div class="canvas-wrap"><canvas id="video_canvas"></canvas></div>
+      <button id="btn_count" class="primary" disabled>Count vehicles</button>
+      <div class="progress" hidden><div id="prog_bar"></div></div>
+      <div id="video_status" class="status"></div>
+    </div>
+    <div class="card" id="video_results" hidden>
+      <h2>Survey result</h2>
+      <div id="video_summary"></div>
+      <video id="ann_video" controls muted playsinline hidden></video>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CAPACITY ============ -->
+<section class="panel" id="tab-cap">
+  <div class="kpis" id="kpis"></div>
+  <div class="grid2">
+    <div class="card"><h2>Calculation</h2><table class="tbl" id="steps"><thead><tr><th>Step</th><th>Value</th><th>Source</th><th>Working</th></tr></thead><tbody></tbody></table></div>
+    <div class="card"><h2>Level of service</h2><div id="los_scale"></div><h2>Notes</h2><div id="cap_notes" class="notes"></div></div>
+  </div>
+</section>
+
+<!-- ============ TWIN ============ -->
+<section class="panel" id="tab-twin">
+  <div class="card">
+    <h2>Digital twin — cell transmission model (Greenshields)</h2>
+    <div class="row wrap">
+      <label class="inline">Demand, PCU/h<input id="tw_demand" type="number" style="width:100px"></label>
+      <label class="inline">Free-flow speed, km/h<input id="tw_vf" type="number" style="width:80px"></label>
+      <label class="inline">Segment length, m<input id="tw_len" type="number" value="1000" style="width:90px"></label>
+      <label class="inline">Obstruction at<select id="tw_at"><option value="0.4">40 %</option><option value="0.6" selected>60 %</option><option value="0.8">80 %</option></select></label>
+      <label class="inline">Obstructed length, m<input id="tw_olen" type="number" value="30" style="width:70px"></label>
+      <label class="inline">Duration<select id="tw_dur"><option value="900">15 min</option><option value="1800" selected>30 min</option><option value="3600">60 min</option></select></label>
+      <label class="inline">Demand<select id="tw_prof"><option value="constant">constant</option><option value="peak">peak hour shape</option></select></label>
+      <button id="btn_twin" class="primary">Run twin</button>
+    </div>
+    <p class="hint" id="twin_help">Uses the capacities from tab 3. Demand and free-flow speed must come from your survey — nothing is assumed.</p>
+    <div id="twin_out" hidden>
+      <div class="kpis" id="twin_kpis"></div>
+      <div class="twin-road">
+        <div class="lbl">Clear road</div><canvas id="road_clear" height="70"></canvas>
+        <div class="lbl">With obstruction</div><canvas id="road_obs" height="70"></canvas>
+        <div class="row"><button id="btn_play" class="ghost">▶ Play</button><input type="range" id="tw_time" min="0" max="0" value="0" style="flex:1"><span id="tw_clock">0:00</span></div>
+      </div>
+      <div class="grid-eq">
+        <div><div class="lbl">Time–space density, clear (PCU/km)</div><canvas id="hm_clear" height="220"></canvas></div>
+        <div><div class="lbl">Time–space density, obstructed (PCU/km)</div><canvas id="hm_obs" height="220"></canvas></div>
+      </div>
+      <div class="legend" id="hm_legend"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ REPORT ============ -->
+<section class="panel" id="tab-report">
+  <div class="card">
+    <h2>Department report (PDF)</h2>
+    <p>Includes the photo with accepted detections, every capacity step with its Indo-HCM source, LOS, lane markings, the video survey and the digital-twin result if you ran them.</p>
+    <label class="check"><input type="checkbox" id="rep_twin" checked> Include digital twin (if run)</label>
+    <label class="check"><input type="checkbox" id="rep_video" checked> Include traffic survey (if run)</label>
+    <button id="btn_report" class="primary">Download PDF report</button>
+    <div id="report_status" class="status"></div>
+  </div>
+</section>
+</main>
+<footer>Capacity method: Indo-HCM 2017 (CSIR-CRRI). Obstruction (F_W), roughness (F_R) and lane-marking indicators are project extensions, shown separately.</footer>
+<script src="app.js"></script>
+</body>
+</html>

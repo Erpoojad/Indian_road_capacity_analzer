@@ -1,0 +1,30 @@
+# Maps every class of every Roboflow dataset (in Pooja's Drive folder) to the
+# 7 classes the dashboard uses. ORDER of `master` must match
+# rca/vision/road_scan.py CLASSES.
+master: [barricade, pothole, illegal_parking, street_vendor, cart, garbage, vehicle]
+
+# Folder that holds the dataset folders (Google Drive, mounted in Colab)
+root: /content/drive/MyDrive/road_datasets   # EDIT if your folder has another name/path
+
+# One entry per dataset folder. `map` gives, for each class NAME in that
+# dataset's data.yaml, the master class or "drop" (box removed, image kept).
+datasets:
+  - folder: "Pothole Detection.v1i.yolov8"
+    map: {"0": pothole}                     # only class is named '0'; images are potholes
+  - folder: "Potholes scanning.v1i.yolov8"
+    map: {"------------------------------": drop,
+          "PotholeDetectionYOLOv8 Project - v1 2024-04-09 1-16pm": pothole}   # labels use class 1 (polygons)
+  - folder: "illegal parking.v2i.yolov8"
+    map: {"illegal parking": illegal_parking}
+  - folder: "street vendors.v1i.yolov8"
+    map: {"street-vendor": street_vendor}
+  - folder: "Street Vendors India.v2i.yolov8"
+    map: {"Carts": cart}
+  - folder: "d2.v1i.yolov8"
+    map: {bin: garbage, garbage: garbage, pavement: drop, road: drop}
+  # Add a lane-marking or vehicle dataset here later, e.g.
+  # - folder: "barricades.v1i.yolov8"
+  #   map: {barricade: barricade}
+
+valid_fraction: 0.15     # split by ORIGINAL photo, so augmented copies never leak into validation
+seed: 0

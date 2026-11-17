@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: indian-road-capacity-analyzer
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: RCA_MAX_VIDEO_SECONDS     # longest part of a video that is analysed
+        value: "600"
+      - key: RCA_MAX_VIDEO_MB
+        value: "150"
+      - key: RCA_ANNOTATE_VIDEO        # 0 = skip the annotated video (faster)
+        value: "1"

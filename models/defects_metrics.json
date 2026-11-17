@@ -1,0 +1,19 @@
+{
+ "precision": 0.80686,
+ "recall": 0.74256,
+ "mAP50": 0.73915,
+ "mAP50_95": 0.54828,
+ "base": "yolov8s.pt",
+ "epochs": 80,
+ "imgsz": 640,
+ "classes": [
+  "barricade",
+  "pothole",
+  "illegal_parking",
+  "street_vendor",
+  "cart",
+  "garbage",
+  "vehicle"
+ ],
+ "source": "Validation split of the original training run (best.pt, 27 Jun 2026)"
+}
