@@ -55,6 +55,10 @@
         <button id="btn_edges" class="ghost" disabled>Mark road edges</button>
         <button id="btn_clear_edges" class="ghost" disabled>Clear</button>
       </div>
+      <div class="row"><span class="hint">No photo at hand?</span>
+        <button class="ghost sample" data-src="samples/marked_road.jpg" data-trap="[[330,545],[1030,545],[560,405],[462,405]]">Sample: marked road</button>
+        <button class="ghost sample" data-src="samples/potholes.jpg" data-trap="">Sample: potholes</button>
+      </div>
       <p class="hint" id="edge_help">Optional: click 4 points — near-left, near-right, far-right, far-left road edge — for perspective-corrected widths.</p>
       <div class="canvas-wrap"><canvas id="photo_canvas"></canvas></div>
       <button id="btn_scan" class="primary" disabled>Detect defects &amp; compute capacity</button>

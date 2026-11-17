@@ -111,14 +111,18 @@ function renderLosScale() {
 
 /* ---------------- photo & road edges ---------------- */
 const pc = $("photo_canvas");
-$("photo").addEventListener("change", (e) => {
-  const f = e.target.files[0]; if (!f) return;
-  S.photoFile = f; S.trap = [];
+$("photo").addEventListener("change", (e) => { const f = e.target.files[0]; if (f) loadPhoto(f, []); });
+document.querySelectorAll("button.sample").forEach((b) => b.addEventListener("click", async () => {
+  const blob = await (await api(b.dataset.src)).blob();
+  loadPhoto(new File([blob], b.dataset.src.split("/").pop(), { type: "image/jpeg" }), b.dataset.trap ? JSON.parse(b.dataset.trap) : []);
+}));
+function loadPhoto(f, trap) {
+  S.photoFile = f; S.trap = trap;
   const img = new Image();
   img.onload = () => { S.photoImg = img; pc.width = img.naturalWidth; pc.height = img.naturalHeight; drawPhoto();
     $("btn_scan").disabled = false; $("btn_edges").disabled = false; $("btn_clear_edges").disabled = false; };
   img.src = URL.createObjectURL(f);
-});
+}
 $("btn_edges").addEventListener("click", () => { S.edgeMode = !S.edgeMode; if (S.edgeMode) S.trap = []; $("btn_edges").classList.toggle("on", S.edgeMode); drawPhoto(); });
 $("btn_clear_edges").addEventListener("click", () => { S.trap = []; S.edgeMode = false; $("btn_edges").classList.remove("on"); drawPhoto(); });
 function canvasPoint(cv, ev) {
